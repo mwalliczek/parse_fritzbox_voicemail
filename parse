@@ -1,0 +1,68 @@
+#!/usr/bin/perl
+
+# (c) 2018 by Matthias Walliczek, matthias@walliczek.de
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+use Email::MIME;
+use IPC::Open2;
+use strict;
+use warnings;
+
+#open (FILE, "mail");
+my $content = do { local $/; <STDIN> };
+#close (FILE);
+
+my $msg = Email::MIME->new($content);
+my $text;
+
+for my $part ($msg->parts) {
+    if ($part->content_type =~ m!audio/x-wav!)
+    {
+            my ($rh, $wh);
+            my $pid = open2($rh, $wh, '/usr/bin/wav2text') or die "open2() failed $!";
+            print $wh $part->body;
+            close ($wh);
+            $text = do { local $/; <$rh> };
+            waitpid $pid, 0;
+#        $text = "Hallo";
+    }
+}
+
+
+
+if (defined $text) {
+    $msg->walk_parts(sub {
+        my ($part) = @_;
+        if ($part->content_type =~ m!multipart/alternative!
+            or $part->content_type eq '' )
+        {
+            $part->walk_parts(sub {
+                my ($subpart) = @_;
+                if ($subpart->content_type =~ m!text/plain!)
+                {
+                    my $body = $subpart->body;
+                    $body =~ s/Anruf von:/Text: $text\n\nAnruf von:/;
+                    $subpart->body_set($body);
+                } elsif ($subpart->content_type =~ m!text/html!)
+                {
+                    my $body = $subpart->body;
+                    $body =~ s/<tr>(\s*<td.*?>\s*)Anruf von:/<tr>$1Text:<\/td>$1$text\n<\/td><\/tr>\n<tr>$1Anruf von:/;
+                    $subpart->body_set($body);
+                }
+            });
+        }
+    });
+}
+
+print $msg->as_string;
